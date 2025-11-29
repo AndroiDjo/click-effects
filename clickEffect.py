@@ -1,13 +1,20 @@
 import sys
-import winsound
+import simpleaudio as sa
 import os
 import random
+import time
 from pynput import mouse
-from PyQt6.QtCore import Qt, QTimer, QPointF
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import QMetaObject, Q_ARG
 from PyQt6.QtCore import pyqtSlot
+
+MAX_CHANNELS = 10
+MIN_PRESS_INTERVAL = 0.02  # 20 ms
+active_channels = []
+last_press_time = 0
+
 
 # ---------------------------
 # Ripple Overlay Widget
@@ -108,8 +115,6 @@ class RippleOverlay(QWidget):
 
     @pyqtSlot(int, int)
     def trigger_ripple(self, x, y):
-        self.play_random_sound()
-        
         self.frame = 0
 
         size = (self.end_radius + self.glow_width) * 4
@@ -119,24 +124,41 @@ class RippleOverlay(QWidget):
         self.show()
         self.timer.start(int(1000 / self.fps))
 
-    def play_random_sound(self):
-        folder = os.path.join(os.path.dirname(sys.argv[0]), "click_sounds")
+    def play_random_sound_from(self, folder_name):
+        global active_channels, MAX_CHANNELS
+
+        # --- Limit thread count ---
+        # Remove finished sounds
+        active_channels = [p for p in active_channels if p.is_playing()]
+
+        if len(active_channels) >= MAX_CHANNELS:
+            return  # too many sounds, skip quietly
+
+        base = os.path.dirname(sys.argv[0])
+        folder = os.path.join(base, "click_sounds", folder_name)
 
         if not os.path.exists(folder):
             return
 
-        files = [f for f in os.listdir(folder) 
-                if f.lower().endswith(".wav")]
-
+        files = [f for f in os.listdir(folder) if f.lower().endswith(".wav")]
         if not files:
             return
 
-        sound_file = os.path.join(folder, random.choice(files))
+        path = os.path.join(folder, random.choice(files))
 
         try:
-            winsound.PlaySound(sound_file, winsound.SND_ASYNC | winsound.SND_FILENAME)
-        except:
-            pass
+            wave_obj = sa.WaveObject.from_wave_file(path)
+            play_obj = wave_obj.play()   # async
+            active_channels.append(play_obj)
+        except Exception as e:
+            print("Sound error:", e)
+
+
+    def play_press_sound(self):
+        self.play_random_sound_from("press")
+
+    def play_release_sound(self):
+        self.play_random_sound_from("release")
 
 
 
@@ -145,7 +167,15 @@ class RippleOverlay(QWidget):
 # ---------------------------
 
 def on_click(x, y, button, pressed):
+    global last_press_time
+    now = time.time()
+
     if pressed:
+        if now - last_press_time < MIN_PRESS_INTERVAL:
+            return  # too fast, ignore
+        last_press_time = now
+
+        app.overlay.play_press_sound()
         QMetaObject.invokeMethod(
             app.overlay,
             "trigger_ripple",
@@ -153,6 +183,10 @@ def on_click(x, y, button, pressed):
             Q_ARG(int, x),
             Q_ARG(int, y)
         )
+
+    else:
+        app.overlay.play_release_sound()
+
 
 # ---------------------------
 # Main
